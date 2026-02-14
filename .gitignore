@@ -1,0 +1,12 @@
+.DS_Store
+**/.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# App artifacts
+dist/
+
+# Xcode user data
+xcuserdata/
