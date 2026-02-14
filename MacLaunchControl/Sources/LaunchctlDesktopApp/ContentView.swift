@@ -50,11 +50,22 @@ struct ContentView: View {
             TableColumn("PID") { item in
                 Text("\(item.pid)")
             }
+            .width(min: 64, ideal: 80, max: 90)
+
             TableColumn("Command") { item in
                 Text(item.command)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+
+            TableColumn("Copy") { item in
+                Button("Copy") {
+                    copyCommand(item.command)
+                }
+                .buttonStyle(.borderless)
+                .help("Копировать Command")
+            }
+            .width(min: 60, ideal: 70, max: 80)
         }
     }
 
@@ -200,5 +211,11 @@ struct ContentView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(label, forType: .string)
         vm.statusMessage = "Скопировано: \(label)"
+    }
+
+    private func copyCommand(_ command: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+        vm.statusMessage = "Скопирован Command"
     }
 }
