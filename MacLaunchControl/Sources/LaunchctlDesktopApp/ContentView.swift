@@ -39,7 +39,7 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 980, minHeight: 680)
+        .frame(minWidth: 1020, minHeight: 700)
         .onAppear {
             vm.refreshAll()
         }
@@ -60,7 +60,7 @@ struct ContentView: View {
 
             TableColumn("Copy") { item in
                 Button("Copy") {
-                    copyCommand(item.command)
+                    copyToClipboard(item.command, message: "Скопирован Command")
                 }
                 .buttonStyle(.borderless)
                 .help("Копировать Command")
@@ -90,7 +90,7 @@ struct ContentView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Button {
-                            copyLabel(item.label)
+                            copyToClipboard(item.label, message: "Скопировано: \(item.label)")
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
@@ -110,8 +110,73 @@ struct ContentView: View {
 
     private var scheduleTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GroupBox("Новая задача / обновление") {
+            GroupBox("Задачи с таймером (включая system/user)") {
                 VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Фильтр:")
+                        TextField("label или путь plist", text: $vm.timerFilter)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 420)
+                        if !vm.timerFilter.isEmpty {
+                            Button("Сброс") {
+                                vm.timerFilter = ""
+                            }
+                        }
+                    }
+
+                    Table(filteredTimedJobs) {
+                        TableColumn("Label") { item in
+                            Text(item.label)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        TableColumn("Scope") { item in
+                            Text(item.scope)
+                        }
+                        TableColumn("Schedule") { item in
+                            Text(item.scheduleDescription)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        TableColumn("Writable") { item in
+                            Text(item.writable ? "yes" : "no")
+                        }
+                        TableColumn("Действие") { item in
+                            HStack(spacing: 8) {
+                                Button("Редактировать") {
+                                    vm.loadTimerForEdit(item)
+                                }
+                                .disabled(!item.writable)
+                                Button {
+                                    copyToClipboard(item.path, message: "Скопирован путь plist")
+                                } label: {
+                                    Image(systemName: "doc.on.doc")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Копировать путь plist")
+                            }
+                        }
+                    }
+                    .frame(minHeight: 220)
+                }
+                .padding(.top, 6)
+            }
+
+            GroupBox(vm.editingTimerPath.isEmpty ? "Новая задача / обновление" : "Редактирование таймера") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !vm.editingTimerPath.isEmpty {
+                        HStack {
+                            Text("plist:")
+                                .foregroundStyle(.secondary)
+                            Text(vm.editingTimerPath)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Выйти из режима") {
+                                vm.clearTimerEditing()
+                            }
+                        }
+                    }
+
                     HStack {
                         Text("Label")
                             .frame(width: 120, alignment: .leading)
@@ -156,7 +221,7 @@ struct ContentView: View {
                     Toggle("Запускать сразу после логина (RunAtLoad)", isOn: $vm.runAtLoad)
 
                     HStack {
-                        Button("Сохранить расписание") {
+                        Button(vm.editingTimerPath.isEmpty ? "Сохранить расписание" : "Сохранить таймер") {
                             vm.saveSchedule()
                         }
                         Button("Обновить список") {
@@ -194,7 +259,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .frame(minHeight: 260)
+                .frame(minHeight: 220)
             }
         }
     }
@@ -207,15 +272,21 @@ struct ContentView: View {
         return vm.launchctlJobs.filter { $0.label.localizedCaseInsensitiveContains(filter) }
     }
 
-    private func copyLabel(_ label: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(label, forType: .string)
-        vm.statusMessage = "Скопировано: \(label)"
+    private var filteredTimedJobs: [TimedLaunchItem] {
+        let filter = vm.timerFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        if filter.isEmpty {
+            return vm.timedJobs
+        }
+
+        return vm.timedJobs.filter {
+            $0.label.localizedCaseInsensitiveContains(filter) ||
+            $0.path.localizedCaseInsensitiveContains(filter)
+        }
     }
 
-    private func copyCommand(_ command: String) {
+    private func copyToClipboard(_ value: String, message: String) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-        vm.statusMessage = "Скопирован Command"
+        NSPasteboard.general.setString(value, forType: .string)
+        vm.statusMessage = message
     }
 }

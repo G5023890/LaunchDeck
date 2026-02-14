@@ -22,6 +22,22 @@ struct ManagedAgent: Identifiable {
     let isLoaded: Bool
 }
 
+struct TimedLaunchItem: Identifiable {
+    let id: String
+    let label: String
+    let path: String
+    let scope: String
+    let commandDisplay: String
+    let commandPath: String
+    let arguments: String
+    let scheduleDescription: String
+    let writable: Bool
+    let runAtLoad: Bool
+    let hour: Int?
+    let minute: Int?
+    let weekdays: Set<Int>
+}
+
 struct ScheduleInput {
     var label: String
     var commandPath: String
