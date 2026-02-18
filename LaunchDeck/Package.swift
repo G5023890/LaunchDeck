@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "MacLaunchControl",
+    name: "LaunchDeck",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v14)
     ],
     products: [
-        .executable(name: "MacLaunchControl", targets: ["LaunchctlDesktopApp"])
+        .executable(name: "LaunchDeck", targets: ["LaunchctlDesktopApp"])
     ],
     targets: [
         .executableTarget(

@@ -1,63 +1,77 @@
-# Visualisation-launchctl
+# LaunchDeck
 
-Нативное macOS приложение (`SwiftUI`) для работы с `launchctl`.
+Профессиональный macOS-инструмент для управления `launchd`/`launchctl`.
 
-## Что умеет
+Репозиторий: https://github.com/G5023890/LaunchDeck
 
-- Показывает запущенные процессы (`ps`)
-- Показывает список `launchctl` jobs
-- Фильтрует jobs по `Label` (вкладка `launchctl`)
-- Копирует полный `Label` в буфер обмена
-- Создает и управляет пользовательскими расписаниями через `LaunchAgents`
+## Что нового
 
-## Структура
+- Полный переход на `NavigationSplitView`
+- ViewModel-driven архитектура с асинхронным выполнением shell-команд
+- Новый UI в стиле Activity Monitor + Console
+- Переименование приложения и проекта в `LaunchDeck`
+- Обновленная иконка приложения
 
-- `MacLaunchControl/` — исходники приложения
-- `MacLaunchControl/scripts/build_app.sh` — сборка `.app` bundle
-- `MacLaunchControl/assets/icon_cropped_square.png` — исходник иконки
+## Разделы приложения
 
-## Требования
+- `Processes`
+  - Таблица с сортировкой: `PID`, `Command`, `CPU`, `Memory`
+  - `Live refresh`
+  - Контекстные действия: `Kill TERM`, `Kill KILL`, `Reveal binary`, `Copy path`
+- `Launch Services`
+  - Фильтрация и таблица jobs: `Label`, `Domain`, `PID`, `State`, `ExitCode`
+  - Цветовые индикаторы состояния (running/loaded/crashed)
+  - Инспектор с секциями `General`, `Schedule`, `Runtime`
+  - Действия: `Load`, `Unload`, `Kickstart`, `Edit plist`, `Reveal`
+- `User Agents` / `System Agents` / `System Daemons`
+  - Представления launch jobs по доменам
+- `Schedules`
+  - Builder LaunchAgents (режимы `Calendar` / `Interval`)
+  - Human-readable preview
+  - Таблица managed agents с расчетом `Next Run`
+- `Diagnostics`
+  - Снимок состояния launchd (`whoami`, `launchctl manageruid`, `managerpid`, `list`)
+  - Консольный вывод для быстрой диагностики
 
-- macOS 13+
-- Xcode / Swift toolchain
+## Технические требования
 
-## Запуск в режиме разработки
+- macOS 14+
+- Xcode / Swift toolchain (Swift 6)
+
+## Структура проекта
+
+- `LaunchDeck/` — Swift Package с исходниками приложения
+- `LaunchDeck/Sources/LaunchctlDesktopApp/` — UI, ViewModels, services, models
+- `LaunchDeck/scripts/build_app.sh` — сборка `.app`
+- `LaunchDeck/assets/icon_cropped_square.png` — исходник иконки
+- `LaunchDeck/dist/` — собранный `.app`
+
+## Локальный запуск
 
 ```bash
-cd MacLaunchControl
-swift run
+cd LaunchDeck
+swift run LaunchDeck
 ```
 
-## Сборка `.app`
+## Сборка приложения
 
 ```bash
-cd MacLaunchControl
+cd LaunchDeck
 ./scripts/build_app.sh
 ```
 
-Готовый bundle:
+Результат:
 
-`MacLaunchControl/dist/MacLaunchControl.app`
+`LaunchDeck/dist/LaunchDeck.app`
 
 Запуск:
 
 ```bash
-open MacLaunchControl/dist/MacLaunchControl.app
+open LaunchDeck/dist/LaunchDeck.app
 ```
 
-## Иконка приложения
-
-По умолчанию скрипт сборки берет PNG из:
-
-`MacLaunchControl/assets/icon_cropped_square.png`
-
-Можно переопределить через env-переменную:
+Установка в `/Applications`:
 
 ```bash
-ICON_SOURCE=/path/to/icon.png ./scripts/build_app.sh
+ditto LaunchDeck/dist/LaunchDeck.app /Applications/LaunchDeck.app
 ```
-
-## Примечание по расписанию
-
-Расписание создается в user-domain (`~/Library/LaunchAgents`) через `launchctl bootstrap gui/<uid>`.
-Это задачи текущего пользователя (не системные daemons).

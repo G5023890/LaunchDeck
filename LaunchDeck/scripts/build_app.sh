@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="MacLaunchControl"
+APP_NAME="LaunchDeck"
 BUNDLE_NAME="${APP_NAME}.app"
 DIST_DIR="${ROOT_DIR}/dist"
 APP_DIR="${DIST_DIR}/${BUNDLE_NAME}"
