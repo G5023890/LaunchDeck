@@ -86,6 +86,23 @@ struct ProcessesView: View {
         Button("Kill TERM") { viewModel.kill(process, force: false) }
         Button("Kill KILL") { viewModel.kill(process, force: true) }
         Divider()
+        Button("Copy process name") {
+            let processName = process.command
+                .split(separator: " ")
+                .first
+                .map(String.init)?
+                .split(separator: "/")
+                .last
+                .map(String.init) ?? process.command
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(processName, forType: .string)
+            viewModel.statusMessage = "Copied \(processName)"
+        }
+        Button("Copy command") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(process.command, forType: .string)
+            viewModel.statusMessage = "Copied command"
+        }
         Button("Reveal binary") { viewModel.revealBinary(for: process) }
         Button("Copy path") {
             if let path = process.binaryPath {

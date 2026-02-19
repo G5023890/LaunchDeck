@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SchedulesView: View {
@@ -96,6 +97,13 @@ struct SchedulesView: View {
                         Text(item.label)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .contextMenu {
+                                Button("Copy Label") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(item.label, forType: .string)
+                                    viewModel.statusMessage = "Copied \(item.label)"
+                                }
+                            }
                     }
                     .width(min: 240, ideal: 320, max: 460)
 

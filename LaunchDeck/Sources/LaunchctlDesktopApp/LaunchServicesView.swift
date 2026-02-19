@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct LaunchServicesView: View {
@@ -55,6 +56,20 @@ struct LaunchServicesView: View {
                 Text(job.label)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .contextMenu {
+                        Button("Copy Label") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(job.label, forType: .string)
+                            viewModel.statusMessage = "Copied \(job.label)"
+                        }
+                        if let program = job.program, !program.isEmpty {
+                            Button("Copy Program") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(program, forType: .string)
+                                viewModel.statusMessage = "Copied \(program)"
+                            }
+                        }
+                    }
             }
             .width(min: 240, ideal: 320, max: 460)
 
