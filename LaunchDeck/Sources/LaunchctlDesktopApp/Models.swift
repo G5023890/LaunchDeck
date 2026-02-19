@@ -52,7 +52,11 @@ enum SidebarSection: String, CaseIterable, Identifiable {
 
 struct RunningProcess: Identifiable, Hashable {
     let pid: Int
-    let command: String
+    let parentPID: Int?
+    let user: String?
+    let threadCount: Int?
+    let uptime: String?
+    let commandPath: String
     let cpu: Double
     let memoryMB: Double
 
@@ -64,8 +68,34 @@ struct RunningProcess: Identifiable, Hashable {
 
     var memoryText: String { String(format: "%.1f MB", memoryMB) }
 
+    var memoryInspectorText: String {
+        if memoryMB >= 1024 {
+            return String(format: "%.2f GB", memoryMB / 1024)
+        }
+        return memoryText
+    }
+
+    var command: String { commandPath }
+
+    var processName: String {
+        let trimmed = commandPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return commandPath }
+
+        if trimmed.hasPrefix("/") {
+            let name = URL(fileURLWithPath: trimmed).lastPathComponent
+            return name.isEmpty ? trimmed : name
+        }
+
+        let tokens = trimmed.split(separator: " ")
+        guard let first = tokens.first else { return trimmed }
+        let component = String(first).split(separator: "/").last.map(String.init) ?? String(first)
+        return component.isEmpty ? trimmed : component
+    }
+
+    var displayPath: String { commandPath }
+
     var binaryPath: String? {
-        let first = command.split(separator: " ").first.map(String.init) ?? command
+        let first = commandPath.split(separator: " ").first.map(String.init) ?? commandPath
         return first.hasPrefix("/") ? first : nil
     }
 }
@@ -134,6 +164,88 @@ enum LaunchJobState: String, Codable, Hashable {
     }
 }
 
+enum LaunchServicesStatusFilter: String, CaseIterable, Identifiable {
+    case all
+    case running
+    case loaded
+    case unloaded
+    case system
+    case user
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All"
+        case .running:
+            return "Running"
+        case .loaded:
+            return "Loaded"
+        case .unloaded:
+            return "Unloaded"
+        case .system:
+            return "System"
+        case .user:
+            return "User"
+        }
+    }
+}
+
+enum LaunchServicesSortOption: String, CaseIterable, Identifiable {
+    case label
+    case domain
+    case status
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .label:
+            return "Label"
+        case .domain:
+            return "Domain"
+        case .status:
+            return "Status"
+        }
+    }
+}
+
+enum LaunchServicesGroup: String, CaseIterable, Identifiable {
+    case applications
+    case userAgents
+    case systemAgents
+    case systemDaemons
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .applications:
+            return "Applications"
+        case .userAgents:
+            return "User Agents"
+        case .systemAgents:
+            return "System Agents"
+        case .systemDaemons:
+            return "System Daemons"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .applications:
+            return "app.badge"
+        case .userAgents:
+            return "person.crop.square"
+        case .systemAgents:
+            return "externaldrive.badge.person.crop"
+        case .systemDaemons:
+            return "server.rack"
+        }
+    }
+}
+
 struct CalendarSpec: Hashable, Codable {
     let weekday: Int?
     let hour: Int
@@ -157,6 +269,83 @@ enum LaunchSchedule: Hashable, Codable {
     }
 }
 
+enum ScheduleMode: String, Hashable, Codable {
+    case calendar
+    case interval
+
+    var title: String {
+        switch self {
+        case .calendar:
+            return "Calendar"
+        case .interval:
+            return "Interval"
+        }
+    }
+}
+
+struct ScheduledAgent: Identifiable, Hashable {
+    let label: String
+    let mode: ScheduleMode
+    let scheduleDescription: String
+    let nextRun: Date?
+    let isLoaded: Bool
+    let fileURL: URL
+    let commandPath: String
+    let arguments: [String]
+    let runAtLoad: Bool
+
+    var id: String { fileURL.path }
+}
+
+enum SchedulesFilter: String, CaseIterable, Identifiable {
+    case all
+    case active
+    case disabled
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All"
+        case .active:
+            return "Active"
+        case .disabled:
+            return "Disabled"
+        }
+    }
+}
+
+enum IntervalUnit: String, CaseIterable, Identifiable {
+    case minutes
+    case hours
+    case days
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .minutes:
+            return "minutes"
+        case .hours:
+            return "hours"
+        case .days:
+            return "days"
+        }
+    }
+
+    var secondsMultiplier: Int {
+        switch self {
+        case .minutes:
+            return 60
+        case .hours:
+            return 3600
+        case .days:
+            return 86_400
+        }
+    }
+}
+
 struct LaunchServiceJob: Identifiable, Hashable {
     let id: String
     let label: String
@@ -170,10 +359,64 @@ struct LaunchServiceJob: Identifiable, Hashable {
     let keepAliveDescription: String?
     let schedule: LaunchSchedule
     let plistPath: String?
+    let environmentVariables: [String: String]
+    let machServices: [String]
+    let rawKeys: [String]
 
     var pidText: String { pid.map(String.init) ?? "-" }
 
     var exitCodeText: String { exitCode.map(String.init) ?? "-" }
+
+    var domainBadgeTitle: String {
+        switch group {
+        case .applications:
+            return "Application"
+        case .userAgents:
+            return "User Agent"
+        case .systemAgents:
+            return "System Agent"
+        case .systemDaemons:
+            return "System Daemon"
+        }
+    }
+
+    var statusBadgeTitle: String {
+        switch state {
+        case .running:
+            return "Running"
+        case .loadedIdle:
+            return "Loaded"
+        case .crashed, .unloaded:
+            return "Not Running"
+        }
+    }
+
+    var secondaryStatusText: String {
+        if let pid, pid > 0 {
+            return "Running (PID \(pid))"
+        }
+        return "Not Running"
+    }
+
+    var isLoaded: Bool { state != .unloaded }
+
+    var group: LaunchServicesGroup {
+        switch domain {
+        case .userAgent:
+            return .userAgents
+        case .systemAgent:
+            return .systemAgents
+        case .systemDaemon:
+            return .systemDaemons
+        case .unknown:
+            return .applications
+        }
+    }
+
+    var hasSchedule: Bool {
+        if case .none = schedule { return false }
+        return true
+    }
 }
 
 struct ManagedAgent: Identifiable, Hashable {

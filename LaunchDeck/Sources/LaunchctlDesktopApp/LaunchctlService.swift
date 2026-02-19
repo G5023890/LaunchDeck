@@ -5,7 +5,7 @@ struct LaunchctlService {
     private let managedPrefix = "com.launchctl.schedule."
 
     func fetchRunningProcesses(limit: Int = 400) async throws -> [RunningProcess] {
-        let result = try await shell.run("/bin/ps", ["-axo", "pid=,pcpu=,rss=,comm="])
+        let result = try await shell.run("/bin/ps", ["-axo", "pid=,ppid=,user=,pcpu=,rss=,etime=,comm="])
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(result.stderr.ifEmpty("ps failed"))
         }
@@ -51,7 +51,10 @@ struct LaunchctlService {
                     runAtLoad: entry.runAtLoad,
                     keepAliveDescription: entry.keepAliveDescription,
                     schedule: entry.schedule,
-                    plistPath: entry.path
+                    plistPath: entry.path,
+                    environmentVariables: entry.environmentVariables,
+                    machServices: entry.machServices,
+                    rawKeys: entry.rawKeys
                 )
             )
 
@@ -73,7 +76,10 @@ struct LaunchctlService {
                     runAtLoad: nil,
                     keepAliveDescription: nil,
                     schedule: .none,
-                    plistPath: nil
+                    plistPath: nil,
+                    environmentVariables: [:],
+                    machServices: [],
+                    rawKeys: []
                 )
             )
         }
@@ -253,7 +259,10 @@ struct LaunchctlService {
             runAtLoad: valid.runAtLoad,
             keepAliveDescription: nil,
             schedule: .none,
-            plistPath: plistURL.path
+            plistPath: plistURL.path,
+            environmentVariables: [:],
+            machServices: [],
+            rawKeys: []
         )
 
         try await unload(job)
@@ -274,7 +283,10 @@ struct LaunchctlService {
             runAtLoad: nil,
             keepAliveDescription: nil,
             schedule: .none,
-            plistPath: plistURL.path
+            plistPath: plistURL.path,
+            environmentVariables: [:],
+            machServices: [],
+            rawKeys: []
         )
         try await unload(job)
     }
@@ -400,6 +412,9 @@ struct LaunchctlService {
         let runAtLoad = dict["RunAtLoad"] as? Bool
         let keepAliveDescription = keepAliveText(from: dict["KeepAlive"])
         let schedule = parseSchedule(from: dict)
+        let environmentVariables = (dict["EnvironmentVariables"] as? [String: String]) ?? [:]
+        let machServices = ((dict["MachServices"] as? [String: Any]) ?? [:]).keys.sorted()
+        let rawKeys = dict.keys.sorted()
 
         return PlistEntry(
             label: label,
@@ -409,7 +424,10 @@ struct LaunchctlService {
             arguments: arguments,
             runAtLoad: runAtLoad,
             keepAliveDescription: keepAliveDescription,
-            schedule: schedule
+            schedule: schedule,
+            environmentVariables: environmentVariables,
+            machServices: machServices,
+            rawKeys: rawKeys
         )
     }
 
@@ -512,17 +530,25 @@ struct LaunchctlService {
         let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
 
-        let fields = text.split(maxSplits: 3, whereSeparator: { $0.isWhitespace })
-        guard fields.count >= 4 else { return nil }
+        let fields = text.split(maxSplits: 6, whereSeparator: { $0.isWhitespace })
+        guard fields.count >= 7 else { return nil }
         guard let pid = Int(fields[0]) else { return nil }
+        let parentPID = Int(fields[1])
+        let user = String(fields[2]).isEmpty ? nil : String(fields[2])
+        let threadCount: Int? = nil
+        let uptime = String(fields[5]).isEmpty ? nil : String(fields[5])
 
-        let cpuRaw = Double(fields[1]) ?? 0
-        let rssKB = Double(fields[2]) ?? 0
-        let command = String(fields[3])
+        let cpuRaw = Double(fields[3]) ?? 0
+        let rssKB = Double(fields[4]) ?? 0
+        let command = String(fields[6])
 
         return RunningProcess(
             pid: pid,
-            command: command,
+            parentPID: parentPID,
+            user: user,
+            threadCount: threadCount,
+            uptime: uptime,
+            commandPath: command,
             cpu: cpuRaw,
             memoryMB: rssKB / 1024
         )
@@ -538,6 +564,9 @@ private struct PlistEntry {
     let runAtLoad: Bool?
     let keepAliveDescription: String?
     let schedule: LaunchSchedule
+    let environmentVariables: [String: String]
+    let machServices: [String]
+    let rawKeys: [String]
 }
 
 private extension String {
