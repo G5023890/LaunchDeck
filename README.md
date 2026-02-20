@@ -4,6 +4,8 @@
 
 Репозиторий: https://github.com/G5023890/LaunchDeck
 
+Лицензия: `Apache-2.0` (см. файл `LICENSE`)
+
 ## Что нового
 
 - Полный переход на `NavigationSplitView`
