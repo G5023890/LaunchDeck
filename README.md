@@ -5,6 +5,7 @@
 Репозиторий: https://github.com/G5023890/LaunchDeck
 
 Лицензия: `Apache-2.0` (см. файл `LICENSE`)
+Релиз: `1.0`
 
 ## Что нового
 
