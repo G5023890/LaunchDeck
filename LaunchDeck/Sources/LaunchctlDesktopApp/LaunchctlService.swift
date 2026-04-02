@@ -142,14 +142,26 @@ struct LaunchctlService {
         let signal = force ? "-KILL" : "-TERM"
         let result = try await shell.run("/bin/kill", [signal, "\(pid)"])
         guard result.status == 0 else {
-            throw LaunchControlError.commandFailed(result.stderr.ifEmpty("kill failed"))
+            throw LaunchControlError.commandFailed(
+                launchctlFriendlyCommandFailure(
+                    action: force ? "force kill process \(pid)" : "terminate process \(pid)",
+                    stderr: result.stderr,
+                    hint: "If this is a protected process, try another account or confirm that the job is not relaunching immediately."
+                )
+            )
         }
     }
 
     func revealBinary(path: String) async throws {
         let result = try await shell.run("/usr/bin/open", ["-R", path])
         guard result.status == 0 else {
-            throw LaunchControlError.commandFailed(result.stderr.ifEmpty("Failed to reveal file"))
+            throw LaunchControlError.commandFailed(
+                launchctlFriendlyCommandFailure(
+                    action: "reveal file",
+                    stderr: result.stderr,
+                    hint: "Check that the path still exists and that Finder has permission to access it."
+                )
+            )
         }
     }
 
@@ -161,7 +173,15 @@ struct LaunchctlService {
         let target = job.domain.bootstrapTarget
         let result = try await shell.run("/bin/launchctl", ["bootstrap", target, plistPath], timeout: 20)
         guard result.status == 0 else {
-            throw LaunchControlError.commandFailed(result.stderr.ifEmpty("bootstrap failed"))
+            throw LaunchControlError.commandFailed(
+                launchctlFriendlyCommandFailure(
+                    action: "load \(job.label)",
+                    stderr: result.stderr,
+                    hint: job.domain == .systemAgent || job.domain == .systemDaemon
+                        ? "System jobs often need administrator privileges or a signed plist placed in a system location."
+                        : "Make sure the plist path is valid and the label is unique."
+                )
+            )
         }
     }
 
@@ -179,7 +199,15 @@ struct LaunchctlService {
             return
         }
 
-        throw LaunchControlError.commandFailed(firstAttempt.stderr.ifEmpty("bootout failed"))
+        throw LaunchControlError.commandFailed(
+            launchctlFriendlyCommandFailure(
+                action: "unload \(job.label)",
+                stderr: firstAttempt.stderr,
+                hint: job.domain == .systemAgent || job.domain == .systemDaemon
+                    ? "System jobs can fail to unload if they were loaded by another session or if permissions are restricted."
+                    : "Refresh the list and try again if the job disappeared after a restart."
+            )
+        )
     }
 
     func kickstart(_ job: LaunchServiceJob) async throws {
@@ -190,7 +218,15 @@ struct LaunchctlService {
             timeout: 20
         )
         guard result.status == 0 else {
-            throw LaunchControlError.commandFailed(result.stderr.ifEmpty("kickstart failed"))
+            throw LaunchControlError.commandFailed(
+                launchctlFriendlyCommandFailure(
+                    action: "kickstart \(job.label)",
+                    stderr: result.stderr,
+                    hint: job.isLoaded
+                        ? "The job is loaded, but launchctl may still refuse if the service cannot be restarted in its current domain."
+                        : "Load the job first, then try kickstart again."
+                )
+            )
         }
     }
 
@@ -200,7 +236,13 @@ struct LaunchctlService {
         }
         let result = try await shell.run("/usr/bin/open", ["-a", "TextEdit", plistPath])
         guard result.status == 0 else {
-            throw LaunchControlError.commandFailed(result.stderr.ifEmpty("Failed to open plist"))
+            throw LaunchControlError.commandFailed(
+                launchctlFriendlyCommandFailure(
+                    action: "open plist in TextEdit",
+                    stderr: result.stderr,
+                    hint: "If TextEdit cannot open the file, try revealing the plist in Finder and opening it manually."
+                )
+            )
         }
     }
 
@@ -222,7 +264,7 @@ struct LaunchctlService {
 
         var plist: [String: Any] = [
             "Label": valid.label,
-            "ProgramArguments": [valid.commandPath] + splitArguments(valid.arguments),
+            "ProgramArguments": [valid.commandPath] + splitShellArguments(valid.arguments),
             "RunAtLoad": valid.runAtLoad,
             "ProcessType": "Background",
             "StandardOutPath": "\(NSHomeDirectory())/Library/Logs/\(valid.label).out.log",
@@ -255,7 +297,7 @@ struct LaunchctlService {
             state: .unloaded,
             exitCode: nil,
             program: valid.commandPath,
-            arguments: splitArguments(valid.arguments),
+            arguments: splitShellArguments(valid.arguments),
             runAtLoad: valid.runAtLoad,
             keepAliveDescription: nil,
             schedule: .none,
@@ -337,7 +379,13 @@ struct LaunchctlService {
     private func fetchLoadedLaunchRecords(limit: Int) async throws -> [LoadedLaunchRecord] {
         let result = try await shell.run("/bin/launchctl", ["list"], timeout: 20)
         guard result.status == 0 else {
-            throw LaunchControlError.commandFailed(result.stderr.ifEmpty("launchctl list failed"))
+            throw LaunchControlError.commandFailed(
+                launchctlFriendlyCommandFailure(
+                    action: "read launchctl list",
+                    stderr: result.stderr,
+                    hint: "This usually indicates a temporary launchd or permission issue. Refresh and try again."
+                )
+            )
         }
 
         let records = result.stdout
@@ -486,12 +534,6 @@ struct LaunchctlService {
         }
     }
 
-    private func splitArguments(_ raw: String) -> [String] {
-        raw
-            .split(whereSeparator: { $0.isWhitespace })
-            .map(String.init)
-    }
-
     private func launchAgentsDirectory() throws -> URL {
         let dir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library")
@@ -553,6 +595,29 @@ struct LaunchctlService {
             memoryMB: rssKB / 1024
         )
     }
+
+}
+
+func launchctlFriendlyCommandFailure(action: String, stderr: String, hint: String) -> String {
+    let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    let lowered = trimmed.lowercased()
+
+    let reason: String
+    if lowered.contains("permission denied") || lowered.contains("operation not permitted") {
+        reason = "macOS denied permission while trying to \(action)."
+    } else if lowered.contains("no such process") || lowered.contains("could not find service") {
+        reason = "The target was not available when LaunchDeck tried to \(action)."
+    } else if lowered.contains("input/output error") {
+        reason = "launchd returned an I/O error while trying to \(action)."
+    } else if lowered.contains("already loaded") || lowered.contains("already exists") {
+        reason = "Launchctl reported that the service is already in the requested state."
+    } else if !trimmed.isEmpty {
+        reason = trimmed
+    } else {
+        reason = "LaunchDeck could not \(action)."
+    }
+
+    return "\(reason) \(hint)"
 }
 
 private struct PlistEntry {

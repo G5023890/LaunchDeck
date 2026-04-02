@@ -4,13 +4,14 @@ import SwiftUI
 struct SchedulesView: View {
     @ObservedObject var viewModel: SchedulesViewModel
     @State private var isArgumentsExpanded = false
+    @State private var shouldConfirmApply = false
 
     var body: some View {
         HSplitView {
             centerColumn
-                .frame(minWidth: 420, idealWidth: 520, maxWidth: 620)
+                .frame(minWidth: 520, idealWidth: 680, maxWidth: .infinity)
             inspectorColumn
-                .frame(minWidth: 480, idealWidth: 640, maxWidth: .infinity)
+                .frame(minWidth: 360, idealWidth: 420, maxWidth: 520)
         }
         .searchable(text: $viewModel.searchText, placement: .toolbar, prompt: "Search scheduled agents")
         .toolbar {
@@ -33,11 +34,41 @@ struct SchedulesView: View {
             }
         }
         .padding(16)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(backgroundLayer)
+        .confirmationDialog(
+            "Apply schedule changes?",
+            isPresented: $shouldConfirmApply,
+            titleVisibility: .visible
+        ) {
+            Button("Apply Changes", role: .destructive) {
+                viewModel.applyChanges()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let agent = viewModel.selectedAgent {
+                Text("Update \(agent.label) and reload the launch agent so the new schedule takes effect.")
+            } else {
+                Text("No scheduled agent is selected.")
+            }
+        }
     }
 
     private var centerColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Scheduled Agents", systemImage: "calendar.badge.clock")
+                    .font(.title3.weight(.semibold))
+
+                Spacer()
+
+                Text("\(viewModel.filteredAgents.count)")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                    .foregroundStyle(Color.accentColor)
+            }
+
             if !viewModel.errorMessage.isEmpty {
                 Text(viewModel.errorMessage)
                     .font(.footnote)
@@ -72,7 +103,7 @@ struct SchedulesView: View {
                     ContentUnavailableView(
                         "No scheduled agents",
                         systemImage: "calendar.badge.exclamationmark",
-                        description: Text("Only LaunchAgents with StartInterval or StartCalendarInterval appear here.")
+                        description: Text("Only LaunchAgents with a schedule appear here.")
                     )
                 }
             }
@@ -80,7 +111,15 @@ struct SchedulesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 14).fill(.regularMaterial))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.thinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
     }
 
     @ViewBuilder
@@ -97,15 +136,21 @@ struct SchedulesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: 14).fill(.regularMaterial))
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.thinMaterial)
+            )
         } else {
             ContentUnavailableView(
                 "Select a scheduled agent",
                 systemImage: "sidebar.right",
-                description: Text("Inspector appears here for editing interval/calendar schedule.")
+                description: Text("Inspector shows schedule details and actions.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: 14).fill(.regularMaterial))
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.thinMaterial)
+            )
         }
     }
 
@@ -119,19 +164,24 @@ struct SchedulesView: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
-                LabeledContent("Command path") {
-                    Text(viewModel.draft.commandPath)
-                        .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                }
+                TextField("Command path", text: $viewModel.draft.commandPath)
+                    .textFieldStyle(.roundedBorder)
 
-                DisclosureGroup("Arguments", isExpanded: $isArgumentsExpanded) {
-                    Text(viewModel.draft.arguments.isEmpty ? "No arguments" : viewModel.draft.arguments)
-                        .font(.system(.footnote, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 4)
+                TextField("Arguments", text: $viewModel.draft.arguments, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("Arguments support quoted values and are split into `ProgramArguments` on save.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                DisclosureGroup("Program Arguments Preview", isExpanded: $isArgumentsExpanded) {
+                    let tokens = splitShellArguments(viewModel.draft.arguments)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(tokens.isEmpty ? "No arguments" : tokens.joined(separator: "\n"))
+                            .font(.system(.footnote, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.top, 4)
                 }
 
                 Toggle("Run at Login", isOn: $viewModel.draft.runAtLoad)
@@ -228,7 +278,7 @@ struct SchedulesView: View {
 
             Spacer(minLength: 4)
 
-            Text(viewModel.showReloadHint ? "Applying changes will reload the agent." : " ")
+            Text(viewModel.showReloadHint ? "Applying changes reloads the agent." : " ")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -236,7 +286,7 @@ struct SchedulesView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
 
             Button("Apply Changes") {
-                viewModel.applyChanges()
+                shouldConfirmApply = true
             }
             .buttonStyle(.borderedProminent)
             .disabled(!viewModel.canApplyChanges)
@@ -296,9 +346,14 @@ struct SchedulesView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(.regularMaterial)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.thinMaterial)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
     }
 
     private func agentIcon(for agent: ScheduledAgent) -> Image {
@@ -320,6 +375,33 @@ struct SchedulesView: View {
             (7, "Sat", "Saturday"),
             (1, "Sun", "Sunday")
         ]
+    }
+
+    private var backgroundLayer: some View {
+        LinearGradient(
+            colors: [
+                Color(nsColor: .windowBackgroundColor),
+                Color(nsColor: .underPageBackgroundColor),
+                Color(nsColor: .controlBackgroundColor)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay(alignment: .topLeading) {
+            Circle()
+                .fill(Color.accentColor.opacity(0.12))
+                .frame(width: 240, height: 240)
+                .blur(radius: 64)
+                .offset(x: -80, y: -90)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Circle()
+                .fill(Color.green.opacity(0.10))
+                .frame(width: 280, height: 280)
+                .blur(radius: 76)
+                .offset(x: 100, y: 120)
+        }
+        .ignoresSafeArea()
     }
 }
 

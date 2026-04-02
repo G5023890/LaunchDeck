@@ -1,6 +1,6 @@
 import Foundation
 
-enum SidebarSection: String, CaseIterable, Identifiable {
+enum SidebarSection: String, CaseIterable, Identifiable, Codable {
     case processes
     case launchServices
     case userAgents
@@ -164,7 +164,7 @@ enum LaunchJobState: String, Codable, Hashable {
     }
 }
 
-enum LaunchServicesStatusFilter: String, CaseIterable, Identifiable {
+enum LaunchServicesStatusFilter: String, CaseIterable, Identifiable, Codable {
     case all
     case running
     case loaded
@@ -192,7 +192,7 @@ enum LaunchServicesStatusFilter: String, CaseIterable, Identifiable {
     }
 }
 
-enum LaunchServicesSortOption: String, CaseIterable, Identifiable {
+enum LaunchServicesSortOption: String, CaseIterable, Identifiable, Codable {
     case label
     case domain
     case status
@@ -211,7 +211,7 @@ enum LaunchServicesSortOption: String, CaseIterable, Identifiable {
     }
 }
 
-enum LaunchServicesGroup: String, CaseIterable, Identifiable {
+enum LaunchServicesGroup: String, CaseIterable, Identifiable, Codable {
     case applications
     case userAgents
     case systemAgents
@@ -297,7 +297,7 @@ struct ScheduledAgent: Identifiable, Hashable {
     var id: String { fileURL.path }
 }
 
-enum SchedulesFilter: String, CaseIterable, Identifiable {
+enum SchedulesFilter: String, CaseIterable, Identifiable, Codable {
     case all
     case active
     case disabled
@@ -431,7 +431,7 @@ struct ManagedAgent: Identifiable, Hashable {
     var modeTitle: String { schedule.modeTitle }
 }
 
-enum ScheduleBuilderMode: String, CaseIterable, Identifiable {
+enum ScheduleBuilderMode: String, CaseIterable, Identifiable, Codable {
     case calendar
     case interval
 
@@ -447,7 +447,7 @@ enum ScheduleBuilderMode: String, CaseIterable, Identifiable {
     }
 }
 
-struct ScheduleDraft {
+struct ScheduleDraft: Codable {
     var label: String = "com.launchctl.schedule.sample"
     var commandPath: String = "/usr/bin/say"
     var arguments: String = "Launch control ready"

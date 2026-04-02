@@ -5,6 +5,8 @@ struct LaunchAgentWriter {
         var dictionary = try parser.readPlistDictionary(at: fileURL)
 
         dictionary["Label"] = draft.label
+        dictionary["Program"] = draft.commandPath
+        dictionary["ProgramArguments"] = [draft.commandPath] + splitShellArguments(draft.arguments)
         dictionary["RunAtLoad"] = draft.runAtLoad
         switch draft.mode {
         case .calendar:
@@ -29,7 +31,8 @@ struct LaunchAgentWriter {
         } else {
             dictionary = [
                 "Label": valid.label,
-                "ProgramArguments": [valid.commandPath] + splitArguments(valid.arguments),
+                "ProgramArguments": [valid.commandPath] + splitShellArguments(valid.arguments),
+                "Program": valid.commandPath,
                 "ProcessType": "Background",
                 "StandardOutPath": "\(NSHomeDirectory())/Library/Logs/\(valid.label).out.log",
                 "StandardErrorPath": "\(NSHomeDirectory())/Library/Logs/\(valid.label).err.log"
@@ -37,14 +40,8 @@ struct LaunchAgentWriter {
         }
 
         dictionary["Label"] = valid.label
-
-        if let existingProgramArgs = dictionary["ProgramArguments"] as? [String], !existingProgramArgs.isEmpty {
-            if existingProgramArgs.first?.isEmpty == false {
-                dictionary["ProgramArguments"] = [valid.commandPath] + splitArguments(valid.arguments)
-            }
-        } else {
-            dictionary["ProgramArguments"] = [valid.commandPath] + splitArguments(valid.arguments)
-        }
+        dictionary["Program"] = valid.commandPath
+        dictionary["ProgramArguments"] = [valid.commandPath] + splitShellArguments(valid.arguments)
 
         dictionary["RunAtLoad"] = valid.runAtLoad
 
@@ -104,11 +101,5 @@ struct LaunchAgentWriter {
         }
 
         return directory
-    }
-
-    private func splitArguments(_ raw: String) -> [String] {
-        raw
-            .split(whereSeparator: { $0.isWhitespace })
-            .map(String.init)
     }
 }

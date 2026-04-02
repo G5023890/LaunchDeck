@@ -4,6 +4,7 @@ import SwiftUI
 struct ProcessesView: View {
     @ObservedObject var viewModel: ProcessesViewModel
     @StateObject private var iconCache = ProcessIconCache()
+    @State private var pendingProcessAction: PendingProcessAction?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -17,33 +18,62 @@ struct ProcessesView: View {
 
             HSplitView {
                 processesTable
-                    .frame(minWidth: 540, idealWidth: 720, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(minWidth: 600, idealWidth: 744, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
                 inspectorPanel
-                    .frame(minWidth: 330, idealWidth: 400, maxWidth: 460, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(minWidth: 360, idealWidth: 420, maxWidth: 500, maxHeight: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(16)
-        .background(
-            LinearGradient(
-                colors: [Color(nsColor: .windowBackgroundColor), Color(nsColor: .controlBackgroundColor)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
+        .background(backgroundLayer)
+        .confirmationDialog(
+            pendingProcessAction?.title ?? "Confirm",
+            isPresented: Binding(
+                get: { pendingProcessAction != nil },
+                set: { if !$0 { pendingProcessAction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingProcessAction {
+                Button(pendingProcessAction.confirmTitle, role: .destructive) {
+                    pendingProcessAction.perform(on: viewModel)
+                    self.pendingProcessAction = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    self.pendingProcessAction = nil
+                }
+            }
+        } message: {
+            Text(pendingProcessAction?.message ?? "")
+        }
     }
 
     private var header: some View {
         HStack {
-            Label("Processes", systemImage: "waveform.path.ecg")
-                .font(.title3.weight(.semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Label("Processes", systemImage: "waveform.path.ecg")
+                    .font(.title3.weight(.semibold))
+
+                Text("Live process activity")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Spacer()
 
-            Toggle("Live refresh", isOn: $viewModel.isLiveRefresh)
-                .toggleStyle(.switch)
+            HStack(spacing: 8) {
+                Text("\(viewModel.processes.count)")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                    .foregroundStyle(Color.accentColor)
+
+                Toggle("Live refresh", isOn: $viewModel.isLiveRefresh)
+                    .toggleStyle(.switch)
+            }
 
             Button {
                 viewModel.refresh()
@@ -51,6 +81,15 @@ struct ProcessesView: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.thinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+        )
     }
 
     private var processesTable: some View {
@@ -103,10 +142,16 @@ struct ProcessesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay {
-            if viewModel.isLoading {
-                ProgressView().controlSize(.large)
+                if viewModel.isLoading {
+                    ProgressView().controlSize(.large)
+                } else if viewModel.processes.isEmpty {
+                    ContentUnavailableView(
+                        "No running processes",
+                        systemImage: "cpu",
+                        description: Text("Refresh to update the process list.")
+                    )
+                }
             }
-        }
     }
 
     @ViewBuilder
@@ -123,15 +168,30 @@ struct ProcessesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.thinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+            )
         } else {
             ContentUnavailableView(
                 "Select a process",
                 systemImage: "cursorarrow.click",
-                description: Text("Inspector shows process metadata and actions.")
+                description: Text("Inspector shows process details and actions.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
+            .padding(18)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+            )
         }
     }
 
@@ -215,13 +275,13 @@ struct ProcessesView: View {
         card(title: "Actions", symbol: "bolt") {
             HStack(spacing: 8) {
                 Button("Terminate") {
-                    viewModel.kill(process, force: false)
+                    pendingProcessAction = .terminate(process)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!viewModel.isProcessAlive(process))
 
                 Button("Force Kill") {
-                    viewModel.kill(process, force: true)
+                    pendingProcessAction = .forceKill(process)
                 }
                 .buttonStyle(.bordered)
                 .disabled(!viewModel.isProcessAlive(process))
@@ -249,9 +309,9 @@ struct ProcessesView: View {
 
     @ViewBuilder
     private func processContextMenu(_ process: RunningProcess) -> some View {
-        Button("Terminate") { viewModel.kill(process, force: false) }
+        Button("Terminate") { pendingProcessAction = .terminate(process) }
             .disabled(!viewModel.isProcessAlive(process))
-        Button("Force Kill") { viewModel.kill(process, force: true) }
+        Button("Force Kill") { pendingProcessAction = .forceKill(process) }
             .disabled(!viewModel.isProcessAlive(process))
         Divider()
         Button("Copy PID") { viewModel.copyPID(process) }
@@ -267,8 +327,43 @@ struct ProcessesView: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.thinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
+    }
+
+    private var backgroundLayer: some View {
+        LinearGradient(
+            colors: [
+                Color(nsColor: .windowBackgroundColor),
+                Color(nsColor: .underPageBackgroundColor),
+                Color(nsColor: .controlBackgroundColor)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay(alignment: .topLeading) {
+            Circle()
+                .fill(Color.accentColor.opacity(0.12))
+                .frame(width: 240, height: 240)
+                .blur(radius: 60)
+                .offset(x: -80, y: -80)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Circle()
+                .fill(Color.orange.opacity(0.10))
+                .frame(width: 280, height: 280)
+                .blur(radius: 72)
+                .offset(x: 100, y: 120)
+        }
+        .ignoresSafeArea()
     }
 
     private func cpuTintColor(_ cpu: Double) -> Color {
@@ -281,6 +376,48 @@ struct ProcessesView: View {
         Text(text)
             .font(.footnote)
             .foregroundStyle(color)
+    }
+}
+
+private enum PendingProcessAction {
+    case terminate(RunningProcess)
+    case forceKill(RunningProcess)
+
+    var title: String {
+        switch self {
+        case .terminate(let process):
+            return "Terminate PID \(process.pid)?"
+        case .forceKill(let process):
+            return "Force kill PID \(process.pid)?"
+        }
+    }
+
+    var confirmTitle: String {
+        switch self {
+        case .terminate:
+            return "Terminate"
+        case .forceKill:
+            return "Force Kill"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .terminate(let process):
+            return "Send SIGTERM to \(process.processName) (\(process.pid))?"
+        case .forceKill(let process):
+            return "Send SIGKILL to \(process.processName) (\(process.pid))? This can immediately stop the process."
+        }
+    }
+
+    @MainActor
+    func perform(on viewModel: ProcessesViewModel) {
+        switch self {
+        case .terminate(let process):
+            viewModel.kill(process, force: false)
+        case .forceKill(let process):
+            viewModel.kill(process, force: true)
+        }
     }
 }
 

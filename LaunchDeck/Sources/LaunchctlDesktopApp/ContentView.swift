@@ -4,11 +4,15 @@ struct ContentView: View {
     @StateObject private var viewModel = AppViewModel()
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
-        } detail: {
-            detailView
+        ZStack {
+            background
+
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
+            } detail: {
+                detailView
+            }
         }
         .navigationTitle("LaunchDeck")
         .navigationSplitViewStyle(.balanced)
@@ -25,6 +29,33 @@ struct ContentView: View {
         .onAppear {
             viewModel.initialLoad()
         }
+    }
+
+    private var background: some View {
+        LinearGradient(
+            colors: [
+                Color(nsColor: .windowBackgroundColor),
+                Color(nsColor: .underPageBackgroundColor),
+                Color(nsColor: .controlBackgroundColor)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay(alignment: .topLeading) {
+            Circle()
+                .fill(Color.accentColor.opacity(0.12))
+                .frame(width: 220, height: 220)
+                .blur(radius: 60)
+                .offset(x: -60, y: -80)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Circle()
+                .fill(Color.blue.opacity(0.10))
+                .frame(width: 260, height: 260)
+                .blur(radius: 70)
+                .offset(x: 80, y: 100)
+        }
+        .ignoresSafeArea()
     }
 
     private var sidebar: some View {

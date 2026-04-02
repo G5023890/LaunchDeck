@@ -13,6 +13,11 @@ let package = Package(
         .executableTarget(
             name: "LaunchctlDesktopApp",
             path: "Sources/LaunchctlDesktopApp"
+        ),
+        .testTarget(
+            name: "LaunchctlDesktopAppTests",
+            dependencies: ["LaunchctlDesktopApp"],
+            path: "Tests/LaunchctlDesktopAppTests"
         )
     ]
 )
