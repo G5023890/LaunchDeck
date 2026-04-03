@@ -9,11 +9,16 @@
 
 ## Что нового
 
-- Полный переход на `NavigationSplitView`
+- Полный переход на `NavigationSplitView` с более плотной macOS-компоновкой
 - ViewModel-driven архитектура с асинхронным выполнением shell-команд
-- Новый UI в стиле Activity Monitor + Console
-- Переименование приложения и проекта в `LaunchDeck`
-- Обновленная иконка приложения
+- Новый UI в стиле Activity Monitor + Console в духе Apple Liquid Glass
+- Улучшенный экран `Launch Services` с инспектором, фильтрами, сортировкой и действиями
+- `Health Score` для launchd jobs с диагностикой рисков и проблем конфигурации
+- `Related Jobs` и `Resources` для анализа связей процесса, plist и runtime-состояния
+- `Safe Edit` для безопасного редактирования plist с валидацией, dry run и rollback
+- Новый редактор launchd jobs с режимами `Structured` и `Raw`
+- Обновленная иконка приложения и переименование проекта в `LaunchDeck`
+- Добавлены тесты для health, relations, resource models и safe edit workflow
 
 ## Разделы приложения
 
@@ -23,9 +28,10 @@
   - Контекстные действия: `Kill TERM`, `Kill KILL`, `Reveal binary`, `Copy path`
 - `Launch Services`
   - Фильтрация и таблица jobs: `Label`, `Domain`, `PID`, `State`, `ExitCode`
-  - Цветовые индикаторы состояния (running/loaded/crashed)
-  - Инспектор с секциями `General`, `Schedule`, `Runtime`
-  - Действия: `Load`, `Unload`, `Kickstart`, `Edit plist`, `Reveal`
+  - Цветовые индикаторы состояния и `Health Score`
+  - Инспектор с секциями `Overview`, `Health Score`, `Resources`, `Related Jobs`, `Schedule`, `Actions`
+  - Действия: `Load`, `Unload`, `Kickstart`, `Safe Edit`, `Reveal in Finder`, `Copy Label`
+  - Ленивая загрузка resource snapshot для CPU, memory, uptime и процесса
 - `User Agents` / `System Agents` / `System Daemons`
   - Представления launch jobs по доменам
 - `Schedules`
@@ -35,6 +41,11 @@
 - `Diagnostics`
   - Снимок состояния launchd (`whoami`, `launchctl manageruid`, `managerpid`, `list`)
   - Консольный вывод для быстрой диагностики
+- `Safe Edit`
+  - Редактор plist в режимах `Structured` и `Raw`
+  - `Dry Run` перед применением изменений
+  - Автоматический backup перед записью и восстановление из rollback
+  - Валидация syntax, semantics и `launchctl` preflight
 
 ## Технические требования
 
