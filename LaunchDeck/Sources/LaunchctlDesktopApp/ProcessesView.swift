@@ -245,6 +245,11 @@ struct ProcessesView: View {
                     .font(.system(.body, design: .monospaced))
                     .monospacedDigit()
             }
+            LabeledContent("State") {
+                Text(process.processStateText ?? "-")
+                    .font(.system(.body, design: .monospaced))
+                    .monospacedDigit()
+            }
             LabeledContent("Uptime") {
                 Text(process.uptime ?? "-")
                     .font(.system(.body, design: .monospaced))

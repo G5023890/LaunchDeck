@@ -1,11 +1,23 @@
 import Foundation
 
-struct LaunchctlService {
-    private let shell = ShellExecutor()
-    private let managedPrefix = "com.launchctl.schedule."
+struct LaunchctlService: @unchecked Sendable {
+    private let commandRunner: any CommandExecuting
+    private let fileAccess: any FileAccessService
+    private let launchctlClient: any LaunchctlClient
+    static let managedPrefix = "com.launchctl.schedule."
+
+    init(
+        commandRunner: any CommandExecuting = ShellExecutor(),
+        fileAccess: any FileAccessService = FoundationFileAccessService(),
+        launchctlClient: (any LaunchctlClient)? = nil
+    ) {
+        self.commandRunner = commandRunner
+        self.fileAccess = fileAccess
+        self.launchctlClient = launchctlClient ?? DefaultLaunchctlClient(runner: commandRunner)
+    }
 
     func fetchRunningProcesses(limit: Int = 400) async throws -> [RunningProcess] {
-        let result = try await shell.run("/bin/ps", ["-axo", "pid=,ppid=,user=,pcpu=,rss=,etime=,comm="])
+        let result = try await commandRunner.run("/bin/ps", ["-axo", "pid=,ppid=,user=,state=,pcpu=,rss=,etime=,comm="], timeout: 20)
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(result.stderr.ifEmpty("ps failed"))
         }
@@ -54,6 +66,13 @@ struct LaunchctlService {
                     plistPath: entry.path,
                     environmentVariables: entry.environmentVariables,
                     machServices: entry.machServices,
+                    workingDirectory: entry.workingDirectory,
+                    standardOutPath: entry.standardOutPath,
+                    standardErrorPath: entry.standardErrorPath,
+                    watchPaths: entry.watchPaths,
+                    queueDirectories: entry.queueDirectories,
+                    ownerAccountName: entry.ownerAccountName,
+                    groupOwnerAccountName: entry.groupOwnerAccountName,
                     rawKeys: entry.rawKeys
                 )
             )
@@ -79,6 +98,13 @@ struct LaunchctlService {
                     plistPath: nil,
                     environmentVariables: [:],
                     machServices: [],
+                    workingDirectory: nil,
+                    standardOutPath: nil,
+                    standardErrorPath: nil,
+                    watchPaths: [],
+                    queueDirectories: [],
+                    ownerAccountName: nil,
+                    groupOwnerAccountName: nil,
                     rawKeys: []
                 )
             )
@@ -101,20 +127,16 @@ struct LaunchctlService {
         let agentsDir = try launchAgentsDirectory()
         let urls: [URL]
         do {
-            urls = try FileManager.default.contentsOfDirectory(
-                at: agentsDir,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )
+            urls = try fileAccess.contentsOfDirectory(at: agentsDir)
         } catch {
-            throw LaunchControlError.io(error.localizedDescription)
+            throw error
         }
 
         var agents: [ManagedAgent] = []
 
         for url in urls where url.pathExtension == "plist" {
             guard let entry = parsePlist(at: url, domain: .userAgent),
-                  entry.label.hasPrefix(managedPrefix)
+                  entry.label.hasPrefix(Self.managedPrefix)
             else {
                 continue
             }
@@ -140,7 +162,7 @@ struct LaunchctlService {
 
     func killProcess(pid: Int, force: Bool) async throws {
         let signal = force ? "-KILL" : "-TERM"
-        let result = try await shell.run("/bin/kill", [signal, "\(pid)"])
+        let result = try await commandRunner.run("/bin/kill", [signal, "\(pid)"], timeout: 10)
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(
                 launchctlFriendlyCommandFailure(
@@ -153,7 +175,7 @@ struct LaunchctlService {
     }
 
     func revealBinary(path: String) async throws {
-        let result = try await shell.run("/usr/bin/open", ["-R", path])
+        let result = try await commandRunner.run("/usr/bin/open", ["-R", path], timeout: 10)
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(
                 launchctlFriendlyCommandFailure(
@@ -170,8 +192,7 @@ struct LaunchctlService {
             throw LaunchControlError.validation("No plist path available for this job")
         }
 
-        let target = job.domain.bootstrapTarget
-        let result = try await shell.run("/bin/launchctl", ["bootstrap", target, plistPath], timeout: 20)
+        let result = try await launchctlClient.bootstrap(domainTarget: job.domain.bootstrapTarget, plistPath: plistPath)
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(
                 launchctlFriendlyCommandFailure(
@@ -186,14 +207,11 @@ struct LaunchctlService {
     }
 
     func unload(_ job: LaunchServiceJob) async throws {
-        let target = job.domain.bootstrapTarget
-
-        let firstAttempt: CommandResult
-        if let plistPath = job.plistPath {
-            firstAttempt = try await shell.run("/bin/launchctl", ["bootout", target, plistPath], timeout: 20)
-        } else {
-            firstAttempt = try await shell.run("/bin/launchctl", ["bootout", "\(target)/\(job.label)"], timeout: 20)
-        }
+        let firstAttempt = try await launchctlClient.bootout(
+            domainTarget: job.domain.bootstrapTarget,
+            serviceTarget: job.label,
+            plistPath: job.plistPath
+        )
 
         if firstAttempt.status == 0 || firstAttempt.stderr.localizedCaseInsensitiveContains("No such process") {
             return
@@ -211,11 +229,9 @@ struct LaunchctlService {
     }
 
     func kickstart(_ job: LaunchServiceJob) async throws {
-        let target = job.domain.bootstrapTarget
-        let result = try await shell.run(
-            "/bin/launchctl",
-            ["kickstart", "-k", "\(target)/\(job.label)"],
-            timeout: 20
+        let result = try await launchctlClient.kickstart(
+            serviceTarget: "\(job.domain.bootstrapTarget)/\(job.label)",
+            force: true
         )
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(
@@ -234,7 +250,7 @@ struct LaunchctlService {
         guard let plistPath = job.plistPath else {
             throw LaunchControlError.validation("No plist path available for this job")
         }
-        let result = try await shell.run("/usr/bin/open", ["-a", "TextEdit", plistPath])
+        let result = try await commandRunner.run("/usr/bin/open", ["-a", "TextEdit", plistPath], timeout: 10)
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(
                 launchctlFriendlyCommandFailure(
@@ -289,6 +305,9 @@ struct LaunchctlService {
             throw LaunchControlError.io(error.localizedDescription)
         }
 
+        let stdoutPath = "\(NSHomeDirectory())/Library/Logs/\(valid.label).out.log"
+        let stderrPath = "\(NSHomeDirectory())/Library/Logs/\(valid.label).err.log"
+
         let job = LaunchServiceJob(
             id: valid.label,
             label: valid.label,
@@ -304,6 +323,13 @@ struct LaunchctlService {
             plistPath: plistURL.path,
             environmentVariables: [:],
             machServices: [],
+            workingDirectory: nil,
+            standardOutPath: stdoutPath,
+            standardErrorPath: stderrPath,
+            watchPaths: [],
+            queueDirectories: [],
+            ownerAccountName: nil,
+            groupOwnerAccountName: nil,
             rawKeys: []
         )
 
@@ -328,6 +354,13 @@ struct LaunchctlService {
             plistPath: plistURL.path,
             environmentVariables: [:],
             machServices: [],
+            workingDirectory: nil,
+            standardOutPath: nil,
+            standardErrorPath: nil,
+            watchPaths: [],
+            queueDirectories: [],
+            ownerAccountName: nil,
+            groupOwnerAccountName: nil,
             rawKeys: []
         )
         try await unload(job)
@@ -337,11 +370,11 @@ struct LaunchctlService {
         let plistURL = try plistURL(for: label)
         try await unloadManagedAgent(label: label)
 
-        if FileManager.default.fileExists(atPath: plistURL.path) {
+        if fileAccess.fileExists(at: plistURL) {
             do {
-                try FileManager.default.removeItem(at: plistURL)
+                try fileAccess.removeItem(at: plistURL)
             } catch {
-                throw LaunchControlError.io(error.localizedDescription)
+                throw error
             }
         }
     }
@@ -360,7 +393,7 @@ struct LaunchctlService {
 
         for (path, args) in commands {
             do {
-                let result = try await shell.run(path, args, timeout: 20)
+                let result = try await commandRunner.run(path, args, timeout: 20)
                 lines.append("\n$ \(path) \(args.joined(separator: " "))")
                 lines.append("status=\(result.status)")
                 lines.append(result.stdout.ifEmpty("(no stdout)").trimmingCharacters(in: .whitespacesAndNewlines))
@@ -377,7 +410,7 @@ struct LaunchctlService {
     }
 
     private func fetchLoadedLaunchRecords(limit: Int) async throws -> [LoadedLaunchRecord] {
-        let result = try await shell.run("/bin/launchctl", ["list"], timeout: 20)
+        let result = try await launchctlClient.list()
         guard result.status == 0 else {
             throw LaunchControlError.commandFailed(
                 launchctlFriendlyCommandFailure(
@@ -427,12 +460,8 @@ struct LaunchctlService {
 
         var entries: [PlistEntry] = []
         for (domain, folder) in locations {
-            guard FileManager.default.fileExists(atPath: folder.path) else { continue }
-            guard let urls = try? FileManager.default.contentsOfDirectory(
-                at: folder,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            ) else {
+            guard fileAccess.fileExists(at: folder) else { continue }
+            guard let urls = try? fileAccess.contentsOfDirectory(at: folder) else {
                 continue
             }
 
@@ -446,7 +475,7 @@ struct LaunchctlService {
     }
 
     private func parsePlist(at url: URL, domain: LaunchDomain) -> PlistEntry? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let data = try? fileAccess.readData(at: url) else { return nil }
         guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) else {
             return nil
         }
@@ -462,6 +491,14 @@ struct LaunchctlService {
         let schedule = parseSchedule(from: dict)
         let environmentVariables = (dict["EnvironmentVariables"] as? [String: String]) ?? [:]
         let machServices = ((dict["MachServices"] as? [String: Any]) ?? [:]).keys.sorted()
+        let workingDirectory = dict["WorkingDirectory"] as? String
+        let standardOutPath = dict["StandardOutPath"] as? String
+        let standardErrorPath = dict["StandardErrorPath"] as? String
+        let watchPaths = (dict["WatchPaths"] as? [String]) ?? []
+        let queueDirectories = (dict["QueueDirectories"] as? [String]) ?? []
+        let fileAttributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let ownerAccountName = fileAttributes?[.ownerAccountName] as? String
+        let groupOwnerAccountName = fileAttributes?[.groupOwnerAccountName] as? String
         let rawKeys = dict.keys.sorted()
 
         return PlistEntry(
@@ -475,6 +512,13 @@ struct LaunchctlService {
             schedule: schedule,
             environmentVariables: environmentVariables,
             machServices: machServices,
+            workingDirectory: workingDirectory,
+            standardOutPath: standardOutPath,
+            standardErrorPath: standardErrorPath,
+            watchPaths: watchPaths,
+            queueDirectories: queueDirectories,
+            ownerAccountName: ownerAccountName,
+            groupOwnerAccountName: groupOwnerAccountName,
             rawKeys: rawKeys
         )
     }
@@ -539,11 +583,11 @@ struct LaunchctlService {
             .appendingPathComponent("Library")
             .appendingPathComponent("LaunchAgents")
 
-        if !FileManager.default.fileExists(atPath: dir.path) {
+        if !fileAccess.fileExists(at: dir) {
             do {
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try fileAccess.createDirectory(at: dir)
             } catch {
-                throw LaunchControlError.io(error.localizedDescription)
+                throw error
             }
         }
 
@@ -572,22 +616,24 @@ struct LaunchctlService {
         let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
 
-        let fields = text.split(maxSplits: 6, whereSeparator: { $0.isWhitespace })
-        guard fields.count >= 7 else { return nil }
+        let fields = text.split(maxSplits: 7, whereSeparator: { $0.isWhitespace })
+        guard fields.count >= 8 else { return nil }
         guard let pid = Int(fields[0]) else { return nil }
         let parentPID = Int(fields[1])
         let user = String(fields[2]).isEmpty ? nil : String(fields[2])
+        let processState = String(fields[3]).isEmpty ? nil : String(fields[3])
         let threadCount: Int? = nil
-        let uptime = String(fields[5]).isEmpty ? nil : String(fields[5])
+        let uptime = String(fields[6]).isEmpty ? nil : String(fields[6])
 
-        let cpuRaw = Double(fields[3]) ?? 0
-        let rssKB = Double(fields[4]) ?? 0
-        let command = String(fields[6])
+        let cpuRaw = Double(fields[4]) ?? 0
+        let rssKB = Double(fields[5]) ?? 0
+        let command = String(fields[7])
 
         return RunningProcess(
             pid: pid,
             parentPID: parentPID,
             user: user,
+            processState: processState,
             threadCount: threadCount,
             uptime: uptime,
             commandPath: command,
@@ -631,12 +677,12 @@ private struct PlistEntry {
     let schedule: LaunchSchedule
     let environmentVariables: [String: String]
     let machServices: [String]
+    let workingDirectory: String?
+    let standardOutPath: String?
+    let standardErrorPath: String?
+    let watchPaths: [String]
+    let queueDirectories: [String]
+    let ownerAccountName: String?
+    let groupOwnerAccountName: String?
     let rawKeys: [String]
-}
-
-private extension String {
-    func ifEmpty(_ fallback: String) -> String {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? fallback : self
-    }
 }

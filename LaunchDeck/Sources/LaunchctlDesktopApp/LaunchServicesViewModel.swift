@@ -6,7 +6,11 @@ import SwiftUI
 final class LaunchServicesViewModel: ObservableObject {
     @Published var jobs: [LaunchServiceJob] = []
     @Published var selectedJobID: LaunchServiceJob.ID? {
-        didSet { stateStore.selectedJobID = selectedJobID }
+        didSet {
+            guard selectedJobID != oldValue else { return }
+            stateStore.selectedJobID = selectedJobID
+            scheduleSelectedJobDetailsRefresh()
+        }
     }
     @Published var filterText = "" {
         didSet { stateStore.launchServicesFilterText = filterText }
@@ -24,19 +28,50 @@ final class LaunchServicesViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var statusMessage = ""
     @Published var errorMessage = ""
+    @Published var editor: LaunchdJobEditorViewModel?
+    @Published private(set) var relationAnalysis: LaunchJobRelationAnalysis?
+    @Published private(set) var resourceOverlay: ResourceOverlayViewModel = .empty
+    @Published private(set) var relationDetailsPhase: SelectionDetailPhase = .idle
+    @Published private(set) var resourceDetailsPhase: SelectionDetailPhase = .idle
 
     private let service: LaunchctlService
     private let scheduleParser = LaunchAgentParser()
+    private let relationAnalyzer = LaunchJobRelationAnalyzer()
+    private let resourceResolver = LaunchJobProcessResolver()
     private let stateStore: LaunchDeckStateStore
+    private let plistEditingService: any PlistEditingService
+    private let validationService: any LaunchdValidationService
+    private let applyService: any LaunchdApplyService
+    private let backupService: any LaunchdBackupService
+    private let healthEvaluator = LaunchJobHealthEvaluator()
+    private var healthReportsByID: [String: LaunchJobHealthReport] = [:]
+    private var runningProcesses: [RunningProcess] = []
+    private var relationIndex: LaunchJobRelationAnalyzer.Index?
+    private var resourceTimeline = LaunchJobResourceTimeline()
+    private var activeResourceJobID: String?
+    private var selectedJobDetailsTask: Task<Void, Never>?
+    private var selectedJobDetailsRevision = 0
 
-    init(service: LaunchctlService, stateStore: LaunchDeckStateStore) {
+    init(
+        service: LaunchctlService,
+        stateStore: LaunchDeckStateStore,
+        plistEditingService: any PlistEditingService,
+        validationService: any LaunchdValidationService,
+        applyService: any LaunchdApplyService,
+        backupService: any LaunchdBackupService
+    ) {
         self.service = service
         self.stateStore = stateStore
+        self.plistEditingService = plistEditingService
+        self.validationService = validationService
+        self.applyService = applyService
+        self.backupService = backupService
         selectedJobID = stateStore.selectedJobID
         filterText = stateStore.launchServicesFilterText
         statusFilter = stateStore.launchServicesStatusFilter
         sortOption = stateStore.launchServicesSortOption
         expandedGroups = stateStore.launchServicesExpandedGroups
+        scheduleSelectedJobDetailsRefresh()
     }
 
     var selectedJob: LaunchServiceJob? {
@@ -56,12 +91,15 @@ final class LaunchServicesViewModel: ObservableObject {
             var fetched = try await service.fetchLaunchServices()
             fetched = sorted(fetched)
             jobs = fetched
+            rebuildHealthReports()
 
             if let selectedJobID, jobs.contains(where: { $0.id == selectedJobID }) == false {
                 self.selectedJobID = nil
             }
 
             statusMessage = "Loaded \(jobs.count) launch jobs"
+            relationIndex = relationAnalyzer.makeIndex(jobs: jobs, runningProcesses: runningProcesses)
+            scheduleSelectedJobDetailsRefresh()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -149,17 +187,59 @@ final class LaunchServicesViewModel: ObservableObject {
     var canRevealSelected: Bool { selectedJob?.plistPath != nil || selectedJob?.program?.hasPrefix("/") == true }
     var canKickstartSelected: Bool { selectedJob?.isLoaded == true }
 
+    func healthReport(for job: LaunchServiceJob) -> LaunchJobHealthReport {
+        healthReportsByID[job.id] ?? healthEvaluator.evaluate(job: job)
+    }
+
     func loadSelected() { performJobAction(named: "Load", on: selectedJob, action: { [self] in try await service.load($0) }) }
     func unloadSelected() { performJobAction(named: "Unload", on: selectedJob, action: { [self] in try await service.unload($0) }) }
     func kickstartSelected() { performJobAction(named: "Kickstart", on: selectedJob, action: { [self] in try await service.kickstart($0) }) }
-    func editSelected() { performJobAction(named: "Edit plist", on: selectedJob, action: { [self] in try await service.openPlistInEditor($0) }) }
+    func editSelected() {
+        guard let job = selectedJob else {
+            errorMessage = "Select a launch service to continue"
+            return
+        }
+        selectedJobID = job.id
+        editor = makeEditor(for: job)
+    }
     func revealSelected() { performJobAction(named: "Reveal", on: selectedJob, action: { [self] in try await service.revealJobFile($0) }) }
 
     func load(job: LaunchServiceJob) { performJobAction(named: "Load", on: job, action: { [self] in try await service.load($0) }) }
     func unload(job: LaunchServiceJob) { performJobAction(named: "Unload", on: job, action: { [self] in try await service.unload($0) }) }
     func kickstart(job: LaunchServiceJob) { performJobAction(named: "Kickstart", on: job, action: { [self] in try await service.kickstart($0) }) }
-    func edit(job: LaunchServiceJob) { performJobAction(named: "Edit plist", on: job, action: { [self] in try await service.openPlistInEditor($0) }) }
+    func edit(job: LaunchServiceJob) {
+        selectedJobID = job.id
+        editor = makeEditor(for: job)
+    }
     func reveal(job: LaunchServiceJob) { performJobAction(named: "Reveal", on: job, action: { [self] in try await service.revealJobFile($0) }) }
+
+    func updateRunningProcesses(_ processes: [RunningProcess]) {
+        runningProcesses = processes
+        relationIndex = relationAnalyzer.makeIndex(jobs: jobs, runningProcesses: runningProcesses)
+        scheduleSelectedJobDetailsRefresh()
+    }
+
+    func requestRelationDetails() {
+        relationDetailsPhase = .loading
+        scheduleSelectedJobDetailsRefresh()
+    }
+
+    func cancelRelationDetailsRequest() {
+        relationDetailsPhase = .idle
+        relationAnalysis = nil
+        scheduleSelectedJobDetailsRefresh()
+    }
+
+    func requestResourceDetails() {
+        resourceDetailsPhase = .loading
+        scheduleSelectedJobDetailsRefresh()
+    }
+
+    func cancelResourceDetailsRequest() {
+        resourceDetailsPhase = .idle
+        resourceOverlay = .empty
+        scheduleSelectedJobDetailsRefresh()
+    }
 
     func copyLabel(_ label: String) {
         NSPasteboard.general.clearContents()
@@ -197,6 +277,141 @@ final class LaunchServicesViewModel: ObservableObject {
         }
     }
 
+    private func scheduleSelectedJobDetailsRefresh() {
+        selectedJobDetailsRevision += 1
+        let revision = selectedJobDetailsRevision
+
+        selectedJobDetailsTask?.cancel()
+
+        guard let selectedJob else {
+            activeResourceJobID = nil
+            resourceTimeline.reset()
+            relationAnalysis = nil
+            resourceOverlay = .empty
+            if relationDetailsPhase != .idle {
+                relationDetailsPhase = .idle
+            }
+            if resourceDetailsPhase != .idle {
+                resourceDetailsPhase = .idle
+            }
+            return
+        }
+
+        let shouldRefreshRelation = relationDetailsPhase != .idle
+        let shouldRefreshResource = resourceDetailsPhase != .idle
+
+        guard shouldRefreshRelation || shouldRefreshResource else {
+            relationAnalysis = nil
+            resourceOverlay = .empty
+            return
+        }
+
+        if shouldRefreshRelation {
+            relationAnalysis = nil
+            relationDetailsPhase = .loading
+        }
+        if shouldRefreshResource {
+            resourceOverlay = .empty
+            resourceDetailsPhase = .loading
+        }
+
+        selectedJobDetailsTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 140_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                self?.applySelectedJobDetails(revision: revision, selectedJobID: selectedJob.id)
+            }
+        }
+    }
+
+    private func applySelectedJobDetails(revision: Int, selectedJobID: String) {
+        guard revision == selectedJobDetailsRevision else { return }
+        guard let selectedJob = selectedJob, selectedJob.id == selectedJobID else { return }
+
+        if relationDetailsPhase != .idle {
+            if let relationIndex {
+                relationAnalysis = relationIndex.analysis(for: selectedJob)
+            } else {
+                relationAnalysis = nil
+            }
+            relationDetailsPhase = .ready
+        }
+
+        if resourceDetailsPhase != .idle {
+            rebuildResourceOverlay(for: selectedJob)
+            resourceDetailsPhase = .ready
+        }
+    }
+
+    private func rebuildResourceOverlay(for selectedJob: LaunchServiceJob) {
+        if activeResourceJobID != selectedJob.id {
+            activeResourceJobID = selectedJob.id
+            resourceTimeline.reset()
+        }
+
+        let resolution = resourceResolver.resolve(job: selectedJob, runningProcesses: runningProcesses)
+        let snapshot = makeResourceSnapshot(for: selectedJob, resolution: resolution)
+
+        if resolution.process != nil {
+            resourceTimeline.append(snapshot: snapshot)
+        } else {
+            resourceTimeline.reset()
+        }
+
+        resourceOverlay = ResourceOverlayViewModel(
+            jobID: selectedJob.id,
+            label: selectedJob.label,
+            resolution: resolution,
+            snapshot: resolution.process == nil ? nil : snapshot,
+            timeline: resourceTimeline
+        )
+    }
+
+    private func makeResourceSnapshot(
+        for job: LaunchServiceJob,
+        resolution: LaunchJobProcessResolution
+    ) -> LaunchJobResourceSnapshot {
+        let process = resolution.process
+        let childCount = process.map { parent in
+            runningProcesses.filter { $0.parentPID == parent.pid }.count
+        }
+
+        return LaunchJobResourceSnapshot(
+            timestamp: Date(),
+            jobID: job.id,
+            label: job.label,
+            reportedPID: job.pid,
+            resolution: resolution,
+            cpu: process?.cpu,
+            memoryMB: process?.memoryMB,
+            uptime: process?.uptime,
+            processState: process?.processStateText,
+            executablePath: process?.binaryPath ?? process?.commandPath,
+            childProcessCount: childCount,
+            openFilesCount: nil
+        )
+    }
+
+    private func rebuildHealthReports() {
+        healthReportsByID = Dictionary(uniqueKeysWithValues: jobs.map { job in
+            (job.id, healthEvaluator.evaluate(job: job))
+        })
+    }
+
+    private func makeEditor(for job: LaunchServiceJob) -> LaunchdJobEditorViewModel? {
+        guard job.plistPath != nil else {
+            errorMessage = "No plist path available for this job"
+            return nil
+        }
+        return LaunchdJobEditorViewModel(
+            sourceJob: job,
+            plistEditingService: plistEditingService,
+            validationService: validationService,
+            applyService: applyService,
+            backupService: backupService
+        )
+    }
+
     private func sorted(_ values: [LaunchServiceJob]) -> [LaunchServiceJob] {
         switch sortOption {
         case .label:
@@ -230,4 +445,10 @@ final class LaunchServicesViewModel: ObservableObject {
             return 3
         }
     }
+}
+
+enum SelectionDetailPhase: Equatable {
+    case idle
+    case loading
+    case ready
 }

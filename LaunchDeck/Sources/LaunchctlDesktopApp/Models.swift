@@ -54,6 +54,7 @@ struct RunningProcess: Identifiable, Hashable {
     let pid: Int
     let parentPID: Int?
     let user: String?
+    let processState: String?
     let threadCount: Int?
     let uptime: String?
     let commandPath: String
@@ -361,6 +362,13 @@ struct LaunchServiceJob: Identifiable, Hashable {
     let plistPath: String?
     let environmentVariables: [String: String]
     let machServices: [String]
+    let workingDirectory: String?
+    let standardOutPath: String?
+    let standardErrorPath: String?
+    let watchPaths: [String]
+    let queueDirectories: [String]
+    let ownerAccountName: String?
+    let groupOwnerAccountName: String?
     let rawKeys: [String]
 
     var pidText: String { pid.map(String.init) ?? "-" }

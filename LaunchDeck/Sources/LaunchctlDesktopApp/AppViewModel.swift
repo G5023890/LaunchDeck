@@ -21,8 +21,38 @@ final class AppViewModel: ObservableObject {
     init(service: LaunchctlService = LaunchctlService(), stateStore: LaunchDeckStateStore = .shared) {
         self.stateStore = stateStore
         selectedSection = stateStore.selectedSection
-        processesViewModel = ProcessesViewModel(service: service, stateStore: stateStore)
-        launchServicesViewModel = LaunchServicesViewModel(service: service, stateStore: stateStore)
+        let fileAccess = FoundationFileAccessService()
+        let commandRunner = ShellExecutor()
+        let launchctlClient = DefaultLaunchctlClient(runner: commandRunner)
+        let plistEditingService = FoundationPlistEditingService(fileAccess: fileAccess)
+        let validationService = DefaultLaunchdValidationService(
+            fileAccess: fileAccess,
+            launchctlClient: launchctlClient,
+            plistEditingService: plistEditingService
+        )
+        let backupService = FoundationLaunchdBackupService(fileAccess: fileAccess)
+        let applyService = DefaultLaunchdApplyService(
+            validationService: validationService,
+            backupService: backupService,
+            plistEditingService: plistEditingService,
+            launchctlClient: launchctlClient,
+            fileAccess: fileAccess
+        )
+
+        let processesVM = ProcessesViewModel(service: service, stateStore: stateStore)
+        let launchServicesVM = LaunchServicesViewModel(
+            service: service,
+            stateStore: stateStore,
+            plistEditingService: plistEditingService,
+            validationService: validationService,
+            applyService: applyService,
+            backupService: backupService
+        )
+        processesVM.onProcessesUpdated = { [weak launchServicesVM] processes in
+            launchServicesVM?.updateRunningProcesses(processes)
+        }
+        processesViewModel = processesVM
+        launchServicesViewModel = launchServicesVM
         schedulesViewModel = SchedulesViewModel(service: service, stateStore: stateStore)
         diagnosticsViewModel = DiagnosticsViewModel(service: service)
     }

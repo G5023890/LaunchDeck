@@ -22,6 +22,8 @@ final class ProcessesViewModel: ObservableObject {
     @Published var statusMessage = ""
     @Published var errorMessage = ""
 
+    var onProcessesUpdated: (([RunningProcess]) -> Void)?
+
     private let service: LaunchctlService
     private let stateStore: LaunchDeckStateStore
     private var liveRefreshTask: Task<Void, Never>?
@@ -71,6 +73,7 @@ final class ProcessesViewModel: ObservableObject {
                 selectedProcessID = nil
             }
             statusMessage = "Updated at \(Date().formatted(date: .omitted, time: .standard))"
+            onProcessesUpdated?(processes)
         } catch {
             errorMessage = error.localizedDescription
         }

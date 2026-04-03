@@ -6,6 +6,8 @@ struct LaunchServicesView: View {
     let scope: SidebarSection
 
     @State private var isAdvancedExpanded = false
+    @State private var isResourcesExpanded = false
+    @State private var isRelatedJobsExpanded = false
     @State private var pendingJobAction: PendingJobAction?
 
     var body: some View {
@@ -69,6 +71,10 @@ struct LaunchServicesView: View {
         } message: {
             Text(pendingJobAction?.message ?? "")
         }
+        .sheet(item: $viewModel.editor) { editor in
+            LaunchdJobEditorView(viewModel: editor)
+                .frame(minWidth: 920, minHeight: 760)
+        }
     }
 
     private var listColumn: some View {
@@ -102,7 +108,7 @@ struct LaunchServicesView: View {
                     Section {
                         if viewModel.isGroupExpanded(section.group) {
                             ForEach(section.jobs) { job in
-                                LaunchServiceRow(job: job)
+                                LaunchServiceRow(job: job, health: viewModel.healthReport(for: job))
                                     .tag(job.id)
                                     .contextMenu {
                                         if job.isLoaded {
@@ -117,7 +123,7 @@ struct LaunchServicesView: View {
                                         Divider()
                                         Button("Reveal in Finder") { viewModel.reveal(job: job) }
                                         Button("Copy Label") { viewModel.copyLabel(job.label) }
-                                        Button("Edit plist") { viewModel.edit(job: job) }
+                                        Button("Safe Edit") { viewModel.edit(job: job) }
                                             .disabled(job.plistPath == nil)
                                     }
                             }
@@ -171,10 +177,17 @@ struct LaunchServicesView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     overviewCard(job)
+                    resourcesCard(job)
+                    healthCard(viewModel.healthReport(for: job))
                     if job.hasSchedule {
                         scheduleCard(job)
                     }
                     detailsCard(job)
+                    LaunchJobRelationsView(
+                        viewModel: viewModel,
+                        selectedJob: job,
+                        isExpanded: $isRelatedJobsExpanded
+                    )
                     actionsCard(job)
                 }
                 .padding(16)
@@ -245,6 +258,98 @@ struct LaunchServicesView: View {
         }
     }
 
+    private func resourcesCard(_ job: LaunchServiceJob) -> some View {
+        inspectorCard(title: "Resources", symbol: "gauge.with.dots.needle.33percent") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Live process snapshot")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Load CPU, memory, uptime, and process state only when you open this section.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Button(isResourcesExpanded ? "Hide" : "Load") {
+                        toggleResourcesSection(for: job)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if isResourcesExpanded {
+                    switch viewModel.resourceDetailsPhase {
+                    case .idle:
+                        ContentUnavailableView(
+                            "Details not requested",
+                            systemImage: "gauge.with.dots.needle.33percent",
+                            description: Text("Open this section to request the live resource snapshot for the selected job.")
+                        )
+                    case .loading:
+                        ProgressView("Loading resource snapshot...")
+                            .controlSize(.regular)
+                    case .ready:
+                        LaunchJobResourceOverlayView(model: viewModel.resourceOverlay)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            syncResourcesRequest(for: job)
+        }
+        .onChange(of: job.id) { _, _ in
+            syncResourcesRequest(for: job)
+        }
+    }
+
+    private func healthCard(_ report: LaunchJobHealthReport) -> some View {
+        inspectorCard(title: "Health Score", symbol: report.status.symbol) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    badge(report.badgeText, color: healthColor(for: report.status))
+                    Text(report.summary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let explanation = report.primaryExplanation {
+                    Text(explanation)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let remediationHint = report.remediationHint {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Suggested action")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(remediationHint)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if report.orderedFactors.isEmpty {
+                    Text("No risk factors detected for this job.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Factor breakdown")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ForEach(report.orderedFactors) { factor in
+                            healthFactorRow(factor)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func scheduleCard(_ job: LaunchServiceJob) -> some View {
         inspectorCard(title: "Schedule", symbol: "calendar.badge.clock") {
             VStack(alignment: .leading, spacing: 8) {
@@ -304,7 +409,7 @@ struct LaunchServicesView: View {
                     Button("Copy Label") { viewModel.copyLabel(job.label) }
                         .buttonStyle(.bordered)
 
-                    Button("Edit plist") { viewModel.editSelected() }
+                    Button("Safe Edit") { viewModel.editSelected() }
                         .buttonStyle(.bordered)
                         .disabled(!viewModel.canEditSelected)
 
@@ -380,6 +485,21 @@ struct LaunchServicesView: View {
         }
     }
 
+    private func healthColor(for status: LaunchJobHealthStatus) -> Color {
+        switch status {
+        case .healthy:
+            return .green
+        case .warning:
+            return .yellow
+        case .broken:
+            return .red
+        case .suspicious:
+            return .orange
+        case .orphaned:
+            return .pink
+        }
+    }
+
     private func badge(_ text: String, color: Color) -> some View {
         Text(text)
             .font(.caption.weight(.semibold))
@@ -390,6 +510,61 @@ struct LaunchServicesView: View {
                 Capsule().strokeBorder(color.opacity(0.25), lineWidth: 1)
             )
             .foregroundStyle(color)
+    }
+
+    private func healthFactorRow(_ factor: LaunchJobRiskFactor) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                badge(factor.severityLabel, color: severityColor(for: factor.severity))
+                Text(factor.title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 8)
+                Text("−\(factor.scoreImpact)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Text(factor.explanation)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let evidence = factor.evidence {
+                Text(evidence)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+
+            if let remediationHint = factor.remediationHint {
+                Text(remediationHint)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
+    private func severityColor(for severity: LaunchJobRiskSeverity) -> Color {
+        switch severity {
+        case .info:
+            return .secondary
+        case .low:
+            return .blue
+        case .medium:
+            return .yellow
+        case .high:
+            return .orange
+        case .critical:
+            return .red
+        }
     }
 
     private func nextRunText(_ value: Date?) -> String {
@@ -437,6 +612,19 @@ struct LaunchServicesView: View {
         }
         .ignoresSafeArea()
     }
+
+    private func toggleResourcesSection(for job: LaunchServiceJob) {
+        isResourcesExpanded.toggle()
+        syncResourcesRequest(for: job)
+    }
+
+    private func syncResourcesRequest(for job: LaunchServiceJob) {
+        if isResourcesExpanded {
+            viewModel.requestResourceDetails()
+        } else {
+            viewModel.cancelResourceDetailsRequest()
+        }
+    }
 }
 
 private enum PendingJobAction {
@@ -483,6 +671,7 @@ private enum PendingJobAction {
 
 private struct LaunchServiceRow: View {
     let job: LaunchServiceJob
+    let health: LaunchJobHealthReport
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -498,6 +687,7 @@ private struct LaunchServiceRow: View {
                 HStack(spacing: 6) {
                     rowBadge(job.domainBadgeTitle, color: .blue)
                     rowBadge(job.statusBadgeTitle, color: statusColor)
+                    rowBadge(health.badgeText, color: healthColor)
                 }
 
                 Text(job.secondaryStatusText)
@@ -528,6 +718,21 @@ private struct LaunchServiceRow: View {
             return .orange
         case .unloaded:
             return .gray
+        }
+    }
+
+    private var healthColor: Color {
+        switch health.status {
+        case .healthy:
+            return .green
+        case .warning:
+            return .yellow
+        case .broken:
+            return .red
+        case .suspicious:
+            return .orange
+        case .orphaned:
+            return .pink
         }
     }
 
